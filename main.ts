@@ -1,40 +1,93 @@
-// Midnight Vault hands in an original 2D top-down heist game: sneak through three
-// bank floors, lift the loot, dodge guards and sweeping cameras, and reach the
-// getaway exit before the alarm — or the clock — catches you. The game is this
-// directory's game/ folder, plain static files a desktop browser loads offline
-// (game/index.html, vanilla canvas, no library and no network request), and this
-// program copies game/ and screenshots/ to /output and writes /output/dossier.json
-// with the vendored make.fun library. Built in the recorded session for the
-// best-heist-game-20261122-0559 bounty.
+// Midnight Vault — entry point for the make.fun best-heist-game bounty.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// What this little program does, in one breath: it takes the finished game
+// sitting in this repository (the `game` folder plus the `screenshots`
+// folder), lays a fresh copy of both into a destination folder, and then
+// asks the bundled make.fun library to describe that destination folder as
+// a dossier file. Nothing here reaches the network and nothing here is
+// random, so running it twice over the same repository writes the exact
+// same bytes twice.
+//
+// Run it from the repository root like this:
+//
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+//
+// Leave MAKEFUN_OUTPUT_DIR unset and the destination is /output.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { buildDossier } from "./vendor/makefun-game.ts";
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+// Where the finished entry goes when the caller says nothing.
+const FALLBACK_DESTINATION = "/output";
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+// The two folders of this repository that make up the entry.
+const FOLDERS_TO_SHIP = ["game", "screenshots"] as const;
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+// The dossier's ceilings, written as arithmetic so the numbers read as
+// what they mean instead of bare magic constants:
+//   - 160 KiB of text in the dossier,
+//   - at most four screenshots, each no bigger than 256 KiB,
+//   - at most 993 files under game/, 48 MiB altogether,
+//   - no single game path longer than a thousand bytes.
+const DOSSIER_CEILINGS = {
+  text_max_bytes: 160 * 1024,
+  screenshots: { max: 4, max_bytes: 256 * 1024 },
+  game_max_files: 1000 - 7,
+  game_max_bytes: 48 * 1024 * 1024,
+  game_path_max_bytes: 1000,
+} as const;
+
+// Pick the destination folder: the environment wins, otherwise the fallback.
+function pickDestination(): string {
+  const fromEnvironment = process.env.MAKEFUN_OUTPUT_DIR;
+  if (fromEnvironment !== undefined && fromEnvironment !== "") {
+    return fromEnvironment;
+  }
+  return FALLBACK_DESTINATION;
+}
+
+// Copy one tree, entry by entry in sorted order, so the walk is the same
+// on every machine and every run. Directories are made as they are met;
+// files are copied byte for byte.
+function mirrorTree(sourceRoot: string, targetRoot: string): void {
+  fs.mkdirSync(targetRoot, { recursive: true });
+  const entries = fs.readdirSync(sourceRoot, { withFileTypes: true });
+  entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+  for (const entry of entries) {
+    const from = path.join(sourceRoot, entry.name);
+    const to = path.join(targetRoot, entry.name);
+    if (entry.isDirectory()) {
+      mirrorTree(from, to);
+    } else if (entry.isFile()) {
+      fs.copyFileSync(from, to);
+    }
+  }
+}
+
+// Lay a fresh copy of one repository folder into the destination, clearing
+// any copy an earlier run left behind first so stale files cannot linger.
+function refreshFolder(repoRoot: string, destination: string, folder: string): void {
+  const source = path.join(repoRoot, folder);
+  if (!fs.existsSync(source)) {
+    return;
+  }
+  const target = path.join(destination, folder);
+  fs.rmSync(target, { recursive: true, force: true });
+  mirrorTree(source, target);
+}
+
+function main(): void {
+  const repoRoot = process.cwd();
+  const destination = pickDestination();
+  fs.mkdirSync(destination, { recursive: true });
+
+  for (const folder of FOLDERS_TO_SHIP) {
+    refreshFolder(repoRoot, destination, folder);
+  }
+
+  const dossierBytes = buildDossier(destination, DOSSIER_CEILINGS);
+  fs.writeFileSync(path.join(destination, "dossier.json"), dossierBytes);
+}
+
+main();
