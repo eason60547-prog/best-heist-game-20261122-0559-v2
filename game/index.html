@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Midnight Vault — a 2D top-down heist game</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #07090f; color: #e8ecf4; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 18px 12px 28px; }
+  h1 { font-size: 22px; letter-spacing: .14em; text-transform: uppercase; color: #ffd166; margin-bottom: 4px; }
+  h1 span { color: #e8ecf4; }
+  .sub { color: #8b93a7; font-size: 13px; margin-bottom: 12px; }
+  #wrap { position: relative; width: 960px; max-width: 96vw; }
+  canvas { display: block; width: 100%; border-radius: 10px; background: #0d1220; box-shadow: 0 10px 40px rgba(0,0,0,.6), 0 0 0 1px #232a3d; }
+  #hud { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .pill { background: #121828; border: 1px solid #232a3d; border-radius: 999px; padding: 6px 12px; font-size: 13px; white-space: nowrap; }
+  .pill b { color: #ffd166; }
+  .pill .lbl { color: #8b93a7; margin-right: 4px; }
+  #alertbar { flex: 1 1 160px; min-width: 160px; display: flex; align-items: center; gap: 8px; }
+  #alertfill { height: 10px; border-radius: 999px; background: #2dd4a7; width: 0%; transition: width .15s linear; }
+  #alerttrack { flex: 1; height: 10px; background: #1a2138; border-radius: 999px; overflow: hidden; }
+  #alertbar.hot #alertfill { background: #ff5d5d; }
+  #alertbar.warm #alertfill { background: #ffb020; }
+  .overlay { position: absolute; inset: 0; border-radius: 10px; background: rgba(5,7,12,.82); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 10px; z-index: 5; }
+  .overlay.hidden { display: none; }
+  .overlay h2 { font-size: 34px; letter-spacing: .1em; text-transform: uppercase; color: #ffd166; }
+  .overlay h2.red { color: #ff5d5d; }
+  .overlay h2.green { color: #2dd4a7; }
+  .overlay p { color: #c3c9d8; font-size: 15px; line-height: 1.55; max-width: 560px; }
+  .overlay .keys { font-size: 13px; color: #8b93a7; line-height: 1.9; }
+  .overlay .keys b { color: #e8ecf4; background: #1a2138; border: 1px solid #2a3349; border-radius: 5px; padding: 1px 7px; font-weight: 600; }
+  button { background: #ffd166; color: #191204; border: 0; border-radius: 999px; padding: 12px 30px; font-size: 16px; font-weight: 700; letter-spacing: .05em; cursor: pointer; margin-top: 6px; }
+  button:hover { background: #ffdd8a; }
+  button.ghost { background: transparent; color: #e8ecf4; border: 1px solid #3a435c; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-top: 12px; font-size: 12.5px; color: #8b93a7; }
+  .legend span i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .foot { margin-top: 14px; font-size: 12px; color: #5c6579; }
+</style>
+</head>
+<body>
+  <h1>Midnight <span>Vault</span></h1>
+  <div class="sub">A 2D top-down heist game &middot; slip in, grab the loot, get out clean</div>
+  <div id="wrap">
+    <div id="hud">
+      <div class="pill"><span class="lbl">SCORE</span><b id="hScore">$0</b></div>
+      <div class="pill"><span class="lbl">LEVEL</span><b id="hLevel">1 / 3</b></div>
+      <div class="pill"><span class="lbl">LOOT</span><b id="hLoot">$0 / $1,000</b></div>
+      <div class="pill"><span class="lbl">TIME</span><b id="hTime">2:00</b></div>
+      <div class="pill"><span class="lbl">LIVES</span><b id="hLives">&hearts;&hearts;&hearts;</b></div>
+      <div class="pill" id="alertbar"><span class="lbl">ALERT</span><div id="alerttrack"><div id="alertfill"></div></div><b id="hAlert">CALM</b></div>
+    </div>
+    <canvas id="game" width="960" height="600"></canvas>
+
+    <div class="overlay" id="ovTitle">
+      <h2>Midnight Vault</h2>
+      <p>You are the crew's inside hand. Tonight the vault is yours &mdash; if you can
+      get in, lift the loot and reach the getaway van before the guards, the cameras
+      and the clock catch up with you.</p>
+      <p><b style="color:#ffd166">Steal the target amount on each floor, then reach the green EXIT.</b><br>
+      Guards and cameras have vision cones. Get spotted and the alert rises &mdash; at 100%
+      the alarm sounds and every guard hunts you. Get grabbed and you lose a life.</p>
+      <div class="keys">
+        <b>W A S D</b> / <b>Arrow keys</b> move &nbsp;&middot;&nbsp; <b>Shift</b> sneak (slower, harder to spot)<br>
+        <b>R</b> restart level &nbsp;&middot;&nbsp; <b>M</b> mute &nbsp;&middot;&nbsp; <b>P</b> pause
+      </div>
+      <button id="btnStart">Start the heist</button>
+      <p style="font-size:12.5px;color:#8b93a7">3 floors &middot; 3 lives &middot; ghost bonus if nobody ever spots you</p>
+    </div>
+
+    <div class="overlay hidden" id="ovLevel">
+      <h2 class="green" id="lvTitle">Floor cleared!</h2>
+      <p id="lvText"></p>
+      <button id="btnNext">Next floor</button>
+    </div>
+
+    <div class="overlay hidden" id="ovBusted">
+      <h2 class="red">Busted!</h2>
+      <p id="bustedText">A guard grabbed you. The crew pulls you out &mdash; one life gone.</p>
+      <button id="btnRetry">Try this floor again</button>
+    </div>
+
+    <div class="overlay hidden" id="ovWin">
+      <h2 class="green">Clean getaway!</h2>
+      <p id="winText"></p>
+      <button id="btnAgain">Play again</button>
+    </div>
+
+    <div class="overlay hidden" id="ovOver">
+      <h2 class="red">The crew is caught</h2>
+      <p id="overText"></p>
+      <button id="btnRestart">Start over</button>
+    </div>
+
+    <div class="overlay hidden" id="ovPause">
+      <h2>Paused</h2>
+      <p>Take a breath. The vault isn't going anywhere.</p>
+      <button id="btnResume">Resume</button>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:#ffd166"></i>Cash $250</span>
+    <span><i style="background:#ffb020"></i>Gold $500</span>
+    <span><i style="background:#7ee7ff"></i>Jewel $1,000</span>
+    <span><i style="background:#2dd4a7"></i>Exit (opens at target)</span>
+    <span><i style="background:#ff5d5d"></i>Guard vision</span>
+    <span><i style="background:#c084fc"></i>Camera vision</span>
+  </div>
+  <div class="foot">Midnight Vault &middot; an original game built for the make.fun best-heist-game bounty &middot; runs offline, no network, no libraries</div>
+
+<script>
+'use strict';
+/* Midnight Vault — 2D top-down heist game. Vanilla canvas, no libraries, no network.
+   Levels are ASCII maps: # wall, . floor, P player, E exit, C cash, G gold, J jewel,
+   K camera, digits 1-9 guard spawn (patrol waypoints are defined per level). */
+const TILE = 40, COLS = 24, ROWS = 15;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const LOOT_VALUE = { C: 250, G: 500, J: 1000 };
+const LEVELS = [
+  {
+    name: 'Floor 1 — Lobby', target: 1000, time: 120,
+    map: [
+      '########################',
+      '#P.....#......C....#...#',
+      '#......#...........#...#',
+      '#..C...#..####.....#..E#',
+      '#......#..#.......##...#',
+      '###.####..#..G....#....#',
+      '#......#..#.......#..C.#',
+      '#..J...#..####.####....#',
+      '#......#......#........#',
+      '#..1......C...#...2....#',
+      '#......#......#........#',
+      '#..C...#..G...#....C...#',
+      '#......#......#........#',
+      '#......K......#....J...#',
+      '########################',
+    ],
+    guards: [
+      { x: 3, y: 9, path: [[3,9],[10,9],[10,11],[3,11]], speed: 1.5 },
+      { x: 17, y: 9, path: [[17,9],[21,9],[21,12],[17,12]], speed: 1.5 },
+    ],
+    cameras: [ { x: 7, y: 13, base: -Math.PI/2, sweep: 1.1, speed: 0.5 } ],
+  },
+  {
+    name: 'Floor 2 — Vault Hall', target: 2000, time: 150,
+    map: [
+      '########################',
+      '#P....#.....C.....#....#',
+      '#.....#...........#..J.#',
+      '#..C..#..#####....#....#',
+      '#.....#..#...#....#..E.#',
+      '##.####..#.G.#.####....#',
+      '#.....#..#...#....#....#',
+      '#..1..#..#...#..2.#..C.#',
+      '#.....#..#####....#....#',
+      '#..C.....#....G...#....#',
+      '#....#####..#######..###',
+      '#....#....#.......#....#',
+      '#.K..#..C.#...J...#.K..#',
+      '#....#....#.......#....#',
+      '########################',
+    ],
+    guards: [
+      { x: 3, y: 7, path: [[3,7],[3,11],[8,11],[8,7]], speed: 1.8 },
+      { x: 15, y: 7, path: [[15,7],[20,7],[20,11],[15,11]], speed: 1.8 },
+      { x: 11, y: 4, path: [[11,4],[11,8],[15,8],[15,4]], speed: 2.0 },
+    ],
+    cameras: [
+      { x: 2, y: 12, base: 0, sweep: 1.3, speed: 0.6 },
+      { x: 21, y: 12, base: Math.PI, sweep: 1.3, speed: 0.6 },
+    ],
+  },
+  {
+    name: 'Floor 3 — The Vault', target: 3000, time: 180,
+    map: [
+      '########################',
+      '#P...#....J....#...C...#',
+      '#....#.........#.......#',
+      '#.C..#..#######..##..E.#',
+      '#....#..#.....#..##....#',
+      '##.###..#.G...#..#..J..#',
+      '#....#..#.....#..#.....#',
+      '#.1..#..#.###.#..#.2...#',
+      '#....#..#.#...#..#.....#',
+      '#.C..#..#.#.J.#..#.C...#',
+      '#....#..#.#...#..#.....#',
+      '#.K..#..#..G..#..#.K...#',
+      '#....#.....C...#..#..G.#',
+      '#....#....3....#.......#',
+      '########################',
+    ],
+    guards: [
+      { x: 2, y: 7, path: [[2,7],[2,12],[6,12],[6,7]], speed: 2.1 },
+      { x: 18, y: 7, path: [[18,7],[18,12],[21,12],[21,7]], speed: 2.1 },
+      { x: 10, y: 13, path: [[10,13],[15,13],[15,10],[10,10]], speed: 2.2 },
+    ],
+    cameras: [
+      { x: 2, y: 11, base: 0, sweep: 1.4, speed: 0.7 },
+      { x: 19, y: 11, base: Math.PI, sweep: 1.4, speed: 0.7 },
+      { x: 12, y: 2, base: Math.PI/2, sweep: 1.0, speed: 0.5 },
+    ],
+  },
+];
+
+const state = {
+  mode: 'title', // title | play | level | busted | win | over | pause
+  level: 0, score: 0, lives: 3, alert: 0, spotted: false, ghost: true,
+  timeLeft: 0, lootGot: 0, loot: [], guards: [], cameras: [], walls: new Set(),
+  exit: null, player: null, keys: {}, muted: false, lastTs: 0, elapsed: 0,
+};
+let audioCtx = null;
+function beep(freq, dur, type, vol) {
+  if (state.muted) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type || 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.06, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + dur);
+  } catch (e) { /* audio unavailable */ }
+}
+const sfx = {
+  coin: () => beep(880, 0.12, 'sine', 0.08),
+  gold: () => { beep(660, 0.1, 'triangle', 0.08); setTimeout(() => beep(990, 0.14, 'triangle', 0.08), 70); },
+  spot: () => beep(220, 0.25, 'sawtooth', 0.07),
+  alarm: () => { beep(440, 0.3, 'square', 0.05); setTimeout(() => beep(330, 0.3, 'square', 0.05), 320); },
+  exit: () => { [523, 659, 784].forEach((f, i) => setTimeout(() => beep(f, 0.18, 'triangle', 0.08), i * 110)); },
+  bust: () => beep(160, 0.5, 'sawtooth', 0.09),
+};
+
+function tileKey(x, y) { return x + ',' + y; }
+function isWall(tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS) return true;
+  return state.walls.has(tileKey(tx, ty));
+}
+function losBlocked(ax, ay, bx, by) { // sample the segment for a wall tile
+  const dx = bx - ax, dy = by - ay, d = Math.hypot(dx, dy), steps = Math.ceil(d / 8);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (isWall(Math.floor((ax + dx * t) / TILE), Math.floor((ay + dy * t) / TILE))) return true;
+  }
+  return false;
+}
+
+function loadLevel(idx) {
+  const L = LEVELS[idx];
+  state.walls.clear(); state.loot = []; state.guards = []; state.cameras = [];
+  state.lootGot = 0; state.alert = 0; state.spotted = false; state.timeLeft = L.time;
+  L.map.forEach((row, y) => {
+    [...row].forEach((ch, x) => {
+      if (ch === '#') state.walls.add(tileKey(x, y));
+      else if (ch === 'P') state.player = { x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, r: 13, dir: 0, moving: false };
+      else if (ch === 'E') state.exit = { x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, open: false };
+      else if (LOOT_VALUE[ch]) state.loot.push({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, kind: ch, taken: false, bob: Math.random() * 6 });
+      else if (ch === 'K') state.cameras.push({ x: x * TILE + TILE / 2, y: y * TILE + TILE / 2, base: 0, sweep: 1.2, speed: 0.55, angle: -Math.PI / 2, t: Math.random() * 6 });
+    });
+  });
+  (L.guards || []).forEach(g => state.guards.push({
+    x: g.x * TILE + TILE / 2, y: g.y * TILE + TILE / 2, r: 13,
+    path: g.path.map(p => ({ x: p[0] * TILE + TILE / 2, y: p[1] * TILE + TILE / 2 })),
+    wp: 1, speed: g.speed * TILE / 10, dir: 0, mode: 'patrol', tx: 0, ty: 0, pauseT: 0,
+  }));
+  (L.cameras || []).forEach(c => {
+    const cam = state.cameras.find(k => Math.abs(k.x - (c.x * TILE + TILE / 2)) < 1 && Math.abs(k.y - (c.y * TILE + TILE / 2)) < 1);
+    if (cam) { cam.base = c.base; cam.sweep = c.sweep; cam.speed = c.speed; cam.angle = c.base; }
+  });
+  updateHUD();
+}
+
+function moveCircle(e, dx, dy) {
+  const nx = e.x + dx, ny = e.y + dy;
+  if (!circleHitsWall(nx, e.y, e.r)) e.x = nx;
+  if (!circleHitsWall(e.x, ny, e.r)) e.y = ny;
+}
+function circleHitsWall(x, y, r) {
+  for (const [ox, oy] of [[-r, -r], [r, -r], [-r, r], [r, r], [0, -r], [0, r], [-r, 0], [r, 0]]) {
+    if (isWall(Math.floor((x + ox) / TILE), Math.floor((y + oy) / TILE))) return true;
+  }
+  return false;
+}
+
+function coneSees(ox, oy, angle, range, halfAngle, tx, ty, sneak) {
+  const dx = tx - ox, dy = ty - oy, d = Math.hypot(dx, dy);
+  const effRange = sneak ? range * 0.62 : range;
+  if (d > effRange) return 0;
+  let da = Math.atan2(dy, dx) - angle;
+  while (da > Math.PI) da -= 2 * Math.PI;
+  while (da < -Math.PI) da += 2 * Math.PI;
+  if (Math.abs(da) > halfAngle) return 0;
+  if (losBlocked(ox, oy, tx, ty)) return 0;
+  return (1 - d / effRange) * (sneak ? 0.55 : 1); // closer = spotted faster
+}
+
+function update(dt) {
+  if (state.mode !== 'play') return;
+  state.elapsed += dt;
+  state.timeLeft -= dt;
+  if (state.timeLeft <= 0) { state.timeLeft = 0; return busted('Out of time — the sun came up and the crew had to scatter.'); }
+
+  // --- player movement ---
+  const k = state.keys;
+  let mx = (k['arrowright'] || k['d'] ? 1 : 0) - (k['arrowleft'] || k['a'] ? 1 : 0);
+  let my = (k['arrowdown'] || k['s'] ? 1 : 0) - (k['arrowup'] || k['w'] ? 1 : 0);
+  const sneak = !!(k['shift']);
+  const p = state.player;
+  p.moving = !!(mx || my);
+  if (p.moving) {
+    const len = Math.hypot(mx, my); mx /= len; my /= len;
+    const sp = (sneak ? 95 : 165) * dt;
+    p.dir = Math.atan2(my, mx);
+    moveCircle(p, mx * sp, my * sp);
+  }
+
+  // --- loot pickup ---
+  for (const l of state.loot) {
+    if (!l.taken && Math.hypot(p.x - l.x, p.y - l.y) < 24) {
+      l.taken = true;
+      const v = LOOT_VALUE[l.kind];
+      state.lootGot += v; state.score += v;
+      if (l.kind === 'J') sfx.gold(); else sfx.coin();
+      if (state.lootGot >= LEVELS[state.level].target && !state.exit.open) {
+        state.exit.open = true; sfx.exit();
+      }
+    }
+  }
+
+  // --- vision / alert ---
+  let see = 0, seer = null;
+  for (const g of state.guards) {
+    const s = coneSees(g.x, g.y, g.dir, 150, 0.65, p.x, p.y, sneak);
+    if (s > 0) { see = Math.max(see, s); seer = g; }
+  }
+  for (const c of state.cameras) {
+    const s = coneSees(c.x, c.y, c.angle, 165, 0.55, p.x, p.y, sneak);
+    if (s > 0) { see = Math.max(see, s); seer = c; }
+  }
+  if (see > 0) {
+    state.alert = Math.min(100, state.alert + see * 55 * dt);
+    if (!state.spotted) { state.spotted = true; state.ghost = false; sfx.spot(); }
+    if (seer && seer.path) { seer.mode = 'chase'; seer.tx = p.x; seer.ty = p.y; }
+    if (state.alert >= 100 && !state.alarmOn) { state.alarmOn = true; sfx.alarm(); state.guards.forEach(g => { g.mode = 'chase'; }); }
+  } else {
+    state.alert = Math.max(0, state.alert - 14 * dt);
+    if (state.alert < 40) state.alarmOn = false;
+  }
+
+  // --- cameras sweep ---
+  for (const c of state.cameras) { c.t += dt; c.angle = c.base + Math.sin(c.t * c.speed) * c.sweep; }
+
+  // --- guards ---
+  for (const g of state.guards) {
+    if (g.mode === 'chase') {
+      const dx = p.x - g.x, dy = p.y - g.y, d = Math.hypot(dx, dy);
+      if (d > 4) { g.dir = Math.atan2(dy, dx); moveCircle(g, dx / d * g.speed * 1.55 * dt, dy / d * g.speed * 1.55 * dt); }
+      if (d > 260 || state.alert < 25) g.mode = 'patrol';
+    } else {
+      if (g.pauseT > 0) { g.pauseT -= dt; continue; }
+      const wp = g.path[g.wp];
+      const dx = wp.x - g.x, dy = wp.y - g.y, d = Math.hypot(dx, dy);
+      if (d < 6) { g.wp = (g.wp + 1) % g.path.length; g.pauseT = 0.7; continue; }
+      g.dir = Math.atan2(dy, dx);
+      moveCircle(g, dx / d * g.speed * dt, dy / d * g.speed * dt);
+    }
+    if (Math.hypot(p.x - g.x, p.y - g.y) < p.r + g.r + 2) return busted('A guard grabbed you in the dark.');
+  }
+
+  // --- exit ---
+  if (state.exit.open && Math.hypot(p.x - state.exit.x, p.y - state.exit.y) < 28) return levelComplete();
+  updateHUD();
+}
+
+function levelComplete() {
+  const timeBonus = Math.round(state.timeLeft) * 10;
+  const ghostBonus = state.ghost ? 500 : 0;
+  state.score += timeBonus + ghostBonus;
+  state.mode = 'level';
+  sfx.exit();
+  document.getElementById('lvTitle').textContent = LEVELS[state.level].name + ' — cleared!';
+  document.getElementById('lvText').innerHTML =
+    'Loot lifted: <b style="color:#ffd166">$' + state.lootGot.toLocaleString() + '</b> &middot; ' +
+    'time bonus <b style="color:#ffd166">+$' + timeBonus.toLocaleString() + '</b>' +
+    (ghostBonus ? ' &middot; ghost bonus <b style="color:#2dd4a7">+$500</b> — nobody ever saw you' : '') +
+    '<br>Total score: <b style="color:#ffd166">$' + state.score.toLocaleString() + '</b>';
+  document.getElementById('btnNext').textContent = state.level >= LEVELS.length - 1 ? 'Finish the job' : 'Next floor';
+  show('ovLevel');
+  updateHUD();
+}
+function nextLevel() {
+  hide('ovLevel');
+  state.level++;
+  if (state.level >= LEVELS.length) return winGame();
+  state.ghost = true; state.alarmOn = false;
+  loadLevel(state.level);
+  state.mode = 'play';
+}
+function winGame() {
+  state.mode = 'win';
+  document.getElementById('winText').innerHTML =
+    'Three floors, one clean getaway.<br>Final score: <b style="color:#ffd166">$' + state.score.toLocaleString() + '</b>' +
+    (state.ghost ? '<br><span style="color:#2dd4a7">Ghost run — the vault never knew you were there.</span>' : '');
+  show('ovWin'); updateHUD();
+}
+function busted(msg) {
+  state.mode = 'busted'; state.lives--; sfx.bust();
+  document.getElementById('bustedText').textContent = msg + (state.lives > 0 ? ' One life gone — ' + state.lives + ' left.' : '');
+  document.getElementById('btnRetry').textContent = state.lives > 0 ? 'Try this floor again' : 'See the damage';
+  show('ovBusted'); updateHUD();
+}
+function retryLevel() {
+  hide('ovBusted');
+  if (state.lives <= 0) {
+    state.mode = 'over';
+    document.getElementById('overText').innerHTML = 'Final score: <b style="color:#ffd166">$' + state.score.toLocaleString() + '</b><br>The crew will be back. They always come back.';
+    show('ovOver'); return;
+  }
+  state.ghost = true; state.alarmOn = false;
+  loadLevel(state.level);
+  state.mode = 'play';
+}
+function startGame() {
+  hide('ovTitle'); hide('ovWin'); hide('ovOver');
+  state.level = 0; state.score = 0; state.lives = 3; state.ghost = true; state.alarmOn = false;
+  loadLevel(0);
+  state.mode = 'play';
+}
+function updateHUD() {
+  const L = LEVELS[state.level];
+  document.getElementById('hScore').textContent = '$' + state.score.toLocaleString();
+  document.getElementById('hLevel').textContent = (state.level + 1) + ' / ' + LEVELS.length + ' · ' + L.name;
+  document.getElementById('hLoot').textContent = '$' + state.lootGot.toLocaleString() + ' / $' + L.target.toLocaleString();
+  const t = Math.max(0, Math.ceil(state.timeLeft));
+  document.getElementById('hTime').textContent = Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+  document.getElementById('hLives').innerHTML = '&hearts;'.repeat(Math.max(0, state.lives)) + '<span style="color:#3a435c">' + '&hearts;'.repeat(Math.max(0, 3 - state.lives)) + '</span>';
+  const a = Math.round(state.alert);
+  document.getElementById('alertfill').style.width = a + '%';
+  const bar = document.getElementById('alertbar');
+  bar.className = 'pill' + (a >= 70 ? ' hot' : a >= 35 ? ' warm' : '');
+  document.getElementById('hAlert').textContent = a >= 100 ? 'ALARM!' : a >= 70 ? 'HUNTED' : a >= 35 ? 'SUSPICIOUS' : 'CALM';
+}
+
+/* ---------- rendering ---------- */
+function drawCone(ox, oy, angle, range, half, color) {
+  ctx.beginPath(); ctx.moveTo(ox, oy);
+  ctx.arc(ox, oy, range, angle - half, angle + half);
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+}
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // floor
+  ctx.fillStyle = '#11162a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+    if (!isWall(x, y)) {
+      ctx.fillStyle = (x + y) % 2 ? '#131a30' : '#121828';
+      ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+    }
+  }
+  // vision cones (under entities)
+  for (const c of state.cameras) drawCone(c.x, c.y, c.angle, 165, 0.55, 'rgba(192,132,252,0.13)');
+  for (const g of state.guards) drawCone(g.x, g.y, g.dir, 150, 0.65, g.mode === 'chase' ? 'rgba(255,93,93,0.20)' : 'rgba(255,93,93,0.10)');
+  // exit
+  const e = state.exit;
+  if (e) {
+    ctx.save();
+    ctx.fillStyle = e.open ? '#2dd4a7' : '#3a435c';
+    ctx.globalAlpha = e.open ? 0.9 + 0.1 * Math.sin(state.elapsed * 5) : 0.55;
+    ctx.fillRect(e.x - 18, e.y - 18, 36, 36);
+    ctx.globalAlpha = 1; ctx.fillStyle = '#07130d';
+    ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(e.open ? 'EXIT' : 'LOCK', e.x, e.y + 1);
+    ctx.restore();
+    if (e.open) { ctx.strokeStyle = 'rgba(45,212,167,0.6)'; ctx.lineWidth = 2; ctx.strokeRect(e.x - 22, e.y - 22, 44, 44); }
+  }
+  // loot
+  for (const l of state.loot) {
+    if (l.taken) continue;
+    const bob = Math.sin(state.elapsed * 3 + l.bob) * 2;
+    const col = l.kind === 'C' ? '#ffd166' : l.kind === 'G' ? '#ffb020' : '#7ee7ff';
+    ctx.save(); ctx.translate(l.x, l.y + bob);
+    ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 10;
+    if (l.kind === 'J') { ctx.rotate(Math.PI / 4); ctx.fillRect(-7, -7, 14, 14); }
+    else { ctx.beginPath(); ctx.arc(0, 0, l.kind === 'G' ? 9 : 7, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+    ctx.fillStyle = col; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('$' + LOOT_VALUE[l.kind], l.x, l.y + 20 + bob);
+  }
+  // walls
+  for (const key of state.walls) {
+    const [x, y] = key.split(',').map(Number);
+    ctx.fillStyle = '#2a3350'; ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+    ctx.fillStyle = '#39436a'; ctx.fillRect(x * TILE, y * TILE, TILE, 3);
+  }
+  // cameras
+  for (const c of state.cameras) {
+    ctx.fillStyle = '#c084fc';
+    ctx.beginPath(); ctx.arc(c.x, c.y, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#c084fc'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(c.x, c.y);
+    ctx.lineTo(c.x + Math.cos(c.angle) * 16, c.y + Math.sin(c.angle) * 16); ctx.stroke();
+  }
+  // guards
+  for (const g of state.guards) {
+    ctx.fillStyle = g.mode === 'chase' ? '#ff5d5d' : '#e5484d';
+    ctx.beginPath(); ctx.arc(g.x, g.y, g.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('!', g.x, g.y + 0.5);
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(g.x, g.y);
+    ctx.lineTo(g.x + Math.cos(g.dir) * 20, g.y + Math.sin(g.dir) * 20); ctx.stroke();
+  }
+  // player
+  const p = state.player;
+  if (p) {
+    ctx.save(); ctx.translate(p.x, p.y);
+    ctx.fillStyle = '#0b0e18'; ctx.beginPath(); ctx.arc(0, 0, p.r + 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.arc(0, 0, p.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#191204'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('$', 0, 0.5);
+    ctx.rotate(p.dir);
+    ctx.fillStyle = '#191204';
+    ctx.beginPath(); ctx.moveTo(p.r + 2, 0); ctx.lineTo(p.r - 4, -5); ctx.lineTo(p.r - 4, 5); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    if (state.keys['shift']) {
+      ctx.strokeStyle = 'rgba(255,209,102,0.7)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 8, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  // darkness vignette
+  const grad = ctx.createRadialGradient(480, 300, 220, 480, 300, 620);
+  grad.addColorStop(0, 'rgba(0,0,0,0)'); grad.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function loop(ts) {
+  const dt = Math.min(0.05, (ts - state.lastTs) / 1000 || 0);
+  state.lastTs = ts;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+  state.keys[k] = true;
+  if (k === 'm') { state.muted = !state.muted; }
+  if (k === 'p' && state.mode === 'play') { state.mode = 'pause'; show('ovPause'); }
+  else if (k === 'p' && state.mode === 'pause') { state.mode = 'play'; hide('ovPause'); }
+  if (k === 'r' && (state.mode === 'play' || state.mode === 'pause')) { hide('ovPause'); state.ghost = true; state.alarmOn = false; loadLevel(state.level); state.mode = 'play'; }
+  if (k === 'enter' && state.mode === 'title') startGame();
+});
+window.addEventListener('keyup', (e) => { state.keys[e.key.toLowerCase()] = false; });
+document.getElementById('btnStart').addEventListener('click', startGame);
+document.getElementById('btnNext').addEventListener('click', nextLevel);
+document.getElementById('btnRetry').addEventListener('click', retryLevel);
+document.getElementById('btnAgain').addEventListener('click', startGame);
+document.getElementById('btnRestart').addEventListener('click', startGame);
+document.getElementById('btnResume').addEventListener('click', () => { hide('ovPause'); state.mode = 'play'; });
+
+/* Screenshot staging: ?shot=title|play|alarm|win — deterministic states for the dossier. */
+function applyShot(name) {
+  if (name === 'play') {
+    startGame();
+    state.player.x = 9 * TILE + 20; state.player.y = 9 * TILE + 20;
+    state.lootGot = 500; state.score = 500;
+    state.loot[0].taken = true; state.loot[1].taken = true;
+    state.guards[0].x = 13 * TILE; state.guards[0].y = 9 * TILE; state.guards[0].dir = Math.PI;
+    updateHUD();
+  } else if (name === 'alarm') {
+    state.level = 1; startGame(); state.level = 1; loadLevel(1); state.mode = 'play';
+    state.alert = 88; state.lootGot = 1250; state.score = 1250; state.ghost = false;
+    state.guards.forEach(g => { g.mode = 'chase'; });
+    state.player.x = 12 * TILE; state.player.y = 9 * TILE;
+    updateHUD();
+  } else if (name === 'win') {
+    state.score = 8450; state.level = 2; state.mode = 'win';
+    document.getElementById('winText').innerHTML = 'Three floors, one clean getaway.<br>Final score: <b style="color:#ffd166">$8,450</b><br><span style="color:#2dd4a7">Ghost run — the vault never knew you were there.</span>';
+    hide('ovTitle'); show('ovWin'); updateHUD();
+  }
+  window.__shotReady = true;
+}
+loadLevel(0);
+state.mode = 'title';
+updateHUD();
+window.__game = state; // debug hook for automated play-testing
+const shot = new URLSearchParams(location.search).get('shot');
+if (shot) applyShot(shot); else window.__shotReady = true;
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
